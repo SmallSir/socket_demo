@@ -1,36 +1,77 @@
 #include "unp.h"
 #include <time.h>
-int
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
-	int					listenfd, connfd;
-	pid_t 				childpid;
-	socklen_t			clilen;
-	struct sockaddr_in	cliaddr,servaddr;
-	void 				sig_chld(int);
+	int i, maxi, maxfd, listenfd, connfd, sockfd;
+	int nready, client[FD_SETSIZE];
+	ssize_t n;
+	fd_set rset, allset;
+	char buf[MAXLINE];
+	socklen_t clilen;
+	struct sockaddr_in cliaddr, servaddr;
+
 	listenfd = socket(AF_INET, SOCK_STREAM, 0);
 	bzero(&servaddr, sizeof(servaddr));
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	servaddr.sin_port = htons(13);
-	Bind(listenfd, (SA *) &servaddr, sizeof(servaddr));
+
+	Bind(listenfd, (SA *)&servaddr, sizeof(servaddr));
+
 	Listen(listenfd, LISTENQ);
-	Signal(SIGCHLD,sig_chld);
-	for (;;) {
-		clilen = sizeof(cliaddr);
-		if((connfd = accept(listenfd,(SA *) &cliaddr,&clilen)) <0)
+
+	maxfd = listenfd;
+	maxi = i;
+	for (i = 0; i < FD_SETSIZE; i++)
+		client[i] = -1;
+	FD_ZERO(&allset);
+	FD_SET(listenfd, &allset);
+
+	for (;;)
+	{
+		rset = allset;
+		nready = Select(maxfd + 1, &rset, NULL, NULL, NULL);
+
+		if (FD_ISSET(listenfd, &rset))
+		{ /*新客户端连接*/
+			clilen = sizeof(cliaddr);
+			connfd = Accept(listenfd, (SA *)&cliaddr, &clilen);
+
+			for (i = 0; i < FD_SETSIZE; i++)
+			{
+				if (client[i] < 0)
+				{
+					client[i] = connfd; //保存形容
+					break;
+				}
+			}
+		}
+		if (i == FD_SETSIZE)
+			err_quit("太多客户");
+		FD_SET(connfd, &allset);
+		if (connfd > maxfd)
+			maxfd = connfd;
+		if (i > maxi)
+			maxi = i;
+		if (--nready <= 0)
+			continue;
+		for (i = 0; i <= maxi; i++)
 		{
-			if(errno == EINTR)
+			if ((sockfd == client[i]) < 0)
 				continue;
-			else
-				err_sys("accept error");
+			if (FD_ISSET(sockfd, &rset))
+			{
+				if ((n == Read(sockfd, buf, MAXLINE)) == 0)
+				{ /*连接被客户关闭*/
+					Close(sockfd);
+					FD_CLR(sockfd, &allset);
+					client[i] = -1;
+				}
+				else
+					Writen(sockfd, buf, n);
+				if(--nready <= 0)
+					break;
+			}
 		}
-		if((childpid = Fork()) == 0)
-		{
-			Close(listenfd);
-			str_echo(connfd);
-			exit(0);
-		}
-		Close(connfd);
 	}
 }
