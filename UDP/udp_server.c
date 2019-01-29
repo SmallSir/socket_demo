@@ -2,16 +2,67 @@
 
 int main(int argc,char **argv)
 {   
-    int sockfd;
-    struct sockaddr_in servaddr,cliaddr;
-    sockfd = Socket(AF_INET,SOCK_DGRAM,0);
+    int         listenfd,connfd,udpfd,nready,maxfdp1;
+    char        mesg[MAXLINE];
+    pid_t       childpid;
+    fd_set      rset;
+    ssize_t     n;
+    socklen_t   len;
+    struct      sockaddr_in servaddr,cliaddr;
+    const int on = 1;
+    void        sig_chld(int);
+
+    /*监听TCP套接字*/
+    listenfd = Socket(AF_INET,SOCK_DGRAM,0);
     bzero(&servaddr,sizeof(servaddr));
     
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(SERV_PORT);
 
-    Bind(sockfd,(SA *)&servaddr,sizeof(servaddr));
+    Setsockopt(listenfd,SOL_SOCKET,SO_REUSEADDR,&on,sizeof(on));
+    Bind(listenfd,(SA *)&servaddr,sizeof(servaddr));
 
-    dg_echo(sockfd,(SA *)&cliaddr,sizeof(cliaddr));
+    Listen(listenfd,LISTENQ);
+    /*监听UDP套接字*/
+    udpfd = Socket(AF_INET,SOCK_DGRAM,0);
+    bzero(&servaddr,sizeof(servaddr));
+    
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servaddr.sin_port = htons(SERV_PORT);
+
+    Bind(udpfd,(SA *)&servaddr,sizeof(servaddr));
+
+    Signal(SIGCHLD,sig_chld);
+    FD_ZERO(&rset);
+    maxfdp1 = max(listenfd,udpfd) + 1;
+    for(;;)
+    {
+        FD_SET(listenfd,&rset);
+        FD_SET(udpfd,&rset);
+        if((nready = select(maxfdp1,&rset,NULL,NULL,NULL)) < 0){
+            if(errno == EINTR)
+                continue;
+            else
+            {
+                err_sys("select error");
+            }
+        }
+        if(FD_ISSET(listenfd,&rset)){
+            len = sizeof(cliaddr);
+            connfd = Accept(listenfd,(SA *)&cliaddr,&len);
+            if((childpid = Fork()) == 0){
+                Close(listenfd);
+                str_echo(connfd);
+                exit(0);
+            }
+            Close(connfd);
+        }
+        if(FD_ISSET(udpfd,&rset)){
+            len = sizeof(cliaddr);
+            n = Recvfrom(udpfd,mesg,MAXLINE,0,(SA *)&cliaddr,&len);
+            Sendto(udpfd,mesg,n,0,(SA *)&cliaddr,len);
+        }
+    }
 }
